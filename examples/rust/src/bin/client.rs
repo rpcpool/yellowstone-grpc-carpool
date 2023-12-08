@@ -447,6 +447,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(Duration::from_secs(10)),
                 Some(Duration::from_secs(10)),
                 false,
+                64 * 1024 * 1024,
             )
             .await
             .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;
@@ -531,24 +532,23 @@ async fn geyser_subscribe(
     while let Some(message) = stream.next().await {
         match message {
             Ok(msg) => {
-                #[allow(clippy::single_match)]
                 match msg.update_oneof {
-                    Some(UpdateOneof::Account(account)) => {
-                        let account: AccountPretty = account.into();
-                        info!(
-                            "new account update: filters {:?}, account: {:#?}",
-                            msg.filters, account
-                        );
-                        continue;
-                    }
-                    Some(UpdateOneof::Transaction(tx)) => {
-                        let tx: TransactionPretty = tx.into();
-                        info!(
-                            "new transaction update: filters {:?}, transaction: {:#?}",
-                            msg.filters, tx
-                        );
-                        continue;
-                    }
+                    // Some(UpdateOneof::Account(account)) => {
+                    //     let account: AccountPretty = account.into();
+                    //     info!(
+                    //         "new account update: filters {:?}, account: {:#?}",
+                    //         msg.filters, account
+                    //     );
+                    //     continue;
+                    // }
+                    // Some(UpdateOneof::Transaction(tx)) => {
+                    //     let tx: TransactionPretty = tx.into();
+                    //     info!(
+                    //         "new transaction update: filters {:?}, transaction: {:#?}",
+                    //         msg.filters, tx
+                    //     );
+                    //     continue;
+                    // }
                     Some(UpdateOneof::Ping(_)) => {
                         // This is necessary to keep load balancers that expect client pings alive. If your load balancer doesn't
                         // require periodic client pings then this is unnecessary
@@ -559,9 +559,11 @@ async fn geyser_subscribe(
                             })
                             .await?;
                     }
+                    Some(UpdateOneof::Slot(msg)) => {
+                        info!("new slot message: {msg:?}");
+                    }
                     _ => {}
                 }
-                info!("new message: {msg:?}")
             }
             Err(error) => {
                 error!("error: {error:?}");
