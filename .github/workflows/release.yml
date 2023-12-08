@@ -7,7 +7,7 @@ concurrency:
 on:
   push:
     branches:
-      - 'master'
+      - 'v1.17-carpool'
     tags:
       - 'v*'
       - 'tools-v*'

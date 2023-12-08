@@ -125,6 +125,7 @@ impl GeyserGrpcClient<()> {
         connect_timeout: Option<Duration>,
         request_timeout: Option<Duration>,
         connect_lazy: bool,
+        max_message_size: usize,
     ) -> GeyserGrpcClientResult<GeyserGrpcClient<impl Interceptor>>
     where
         E: Into<Bytes>,
@@ -147,7 +148,7 @@ impl GeyserGrpcClient<()> {
         Ok(GeyserGrpcClient::new(
             HealthClient::with_interceptor(channel.clone(), interceptor.clone()),
             GeyserClient::with_interceptor(channel, interceptor)
-                .max_decoding_message_size(Self::max_decoding_message_size()),
+                .max_decoding_message_size(max_message_size),
         ))
     }
 }

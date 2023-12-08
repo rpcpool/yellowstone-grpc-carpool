@@ -1,6 +1,6 @@
 [package]
 name = "yellowstone-grpc-tools"
-version = "1.0.0-rc.9+solana.1.17.15"
+version = "1.0.0-rc.9+solana.1.17.15.carpool"
 authors = { workspace = true }
 edition = { workspace = true }
 description = "Yellowstone gRPC Tools"
@@ -22,6 +22,7 @@ required-features = ["kafka"]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 atty = { workspace = true }
+bs58 = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 const-hex = { workspace = true, optional = true }
 futures = { workspace = true }
