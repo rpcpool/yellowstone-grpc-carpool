@@ -8,7 +8,7 @@ use {
     tracing::{info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
-        prelude::{subscribe_update::UpdateOneof, SubscribeUpdate},
+        prelude::{subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount},
         prost::Message as _,
     },
     yellowstone_grpc_tools::{
@@ -119,12 +119,19 @@ impl ArgsAction {
 
         // Receive-send loop
         let mut send_tasks = JoinSet::new();
+        let mut cached_messages = vec![];
         'outer: loop {
             let sleep = sleep(Duration::from_millis(config.bulk_max_wait_ms as u64));
             tokio::pin!(sleep);
             let mut messages = vec![];
-            let mut prom_kind = vec![];
+            let mut prom_kinds = vec![];
             while messages.len() < config.bulk_max_size {
+                while let Some((message, prom_kind)) = cached_messages.pop() {
+                    messages.push(message);
+                    prom_kinds.push(prom_kind);
+                    continue;
+                }
+
                 let message = tokio::select! {
                     _ = &mut shutdown => break 'outer,
                     _ = &mut sleep => break,
@@ -147,17 +154,81 @@ impl ArgsAction {
                     None => break 'outer,
                 };
 
-                match &message.update_oneof {
-                    Some(UpdateOneof::Ping(_)) => continue,
-                    Some(UpdateOneof::Pong(_)) => continue,
-                    Some(value) => prom_kind.push(GprcMessageKind::from(value)),
-                    None => unreachable!("Expect valid message"),
-                };
+                match &message {
+                    SubscribeUpdate {
+                        filters: _,
+                        update_oneof: Some(UpdateOneof::Ping(_)),
+                    } => {}
+                    SubscribeUpdate {
+                        filters: _,
+                        update_oneof: Some(UpdateOneof::Pong(_)),
+                    } => {}
+                    SubscribeUpdate {
+                        filters,
+                        update_oneof: Some(UpdateOneof::Block(block_message)),
+                    } => {
+                        // hack for now
+                        let exclude: Vec<Vec<u8>> = [
+                            // "11111111111111111111111111111111", // 926
+                            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // 707
+                            "Vote111111111111111111111111111111111111111", // 672
+                                                                           // "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s", // 140
+                                                                           // "SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f", // 120
+                                                                           // "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH", // 74
+                                                                           // "dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH", // 35
+                                                                           // "zDEXqXEG7gAyxb1Kg9mK5fPnUdENCGKzWrM21RMdWRq", // 33
+                                                                           // "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", // 28
+                                                                           // "ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD", // 26
+                                                                           // "SAGEqqFewepDHH6hMDcmWy7yjHPpyKLDnRXKb3Ki8e6", // 18
+                                                                           // "Cargo8a1e6NkGyrjy4BQEW4ASGKs9KSyDyUrXMfpJoiH", // 18
+                                                                           // "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX", // 17
+                                                                           // "Stake11111111111111111111111111111111111111", // 14
+                        ]
+                        .into_iter()
+                        .map(|v| bs58::decode(v).into_vec())
+                        .collect::<Result<_, _>>()?;
 
-                messages.push(PubsubMessage {
-                    data: message.encode_to_vec(),
-                    ..Default::default()
-                });
+                        for account in block_message.accounts.iter() {
+                            if exclude.iter().any(|key| key == &account.owner) {
+                                continue;
+                            }
+
+                            let update_oneof = UpdateOneof::Account(SubscribeUpdateAccount {
+                                account: Some(account.clone()),
+                                slot: block_message.slot,
+                                is_startup: false,
+                            });
+                            let prom_kind = GprcMessageKind::from(&update_oneof);
+                            cached_messages.push((
+                                PubsubMessage {
+                                    data: SubscribeUpdate {
+                                        filters: filters.clone(),
+                                        update_oneof: Some(update_oneof),
+                                    }
+                                    .encode_to_vec(),
+                                    ..Default::default()
+                                },
+                                prom_kind,
+                            ));
+                        }
+                    }
+                    SubscribeUpdate {
+                        filters: _,
+                        update_oneof: Some(value),
+                    } => {
+                        cached_messages.push((
+                            PubsubMessage {
+                                data: message.encode_to_vec(),
+                                ..Default::default()
+                            },
+                            GprcMessageKind::from(value),
+                        ));
+                    }
+                    SubscribeUpdate {
+                        filters: _,
+                        update_oneof: None,
+                    } => unreachable!("Expect valid message"),
+                };
             }
             if messages.is_empty() {
                 continue;
@@ -167,7 +238,7 @@ impl ArgsAction {
                 .publish_bulk(messages)
                 .await
                 .into_iter()
-                .zip(prom_kind.into_iter())
+                .zip(prom_kinds.into_iter())
             {
                 send_tasks.spawn(async move {
                     awaiter.get().await?;

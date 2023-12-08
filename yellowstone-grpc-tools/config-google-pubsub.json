@@ -15,7 +15,7 @@
                 "client": {
                     "account_include": [],
                     "include_transactions": false,
-                    "include_accounts": false,
+                    "include_accounts": true,
                     "include_entries": false
                 }
             }
