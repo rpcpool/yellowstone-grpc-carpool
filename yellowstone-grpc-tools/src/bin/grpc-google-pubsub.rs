@@ -119,17 +119,25 @@ impl ArgsAction {
 
         // Receive-send loop
         let mut send_tasks = JoinSet::new();
-        let mut cached_messages = vec![];
+        let mut cached_messages: Vec<(PubsubMessage, GprcMessageKind)> = vec![];
         'outer: loop {
             let sleep = sleep(Duration::from_millis(config.bulk_max_wait_ms as u64));
             tokio::pin!(sleep);
+            let mut messages_size = 0;
             let mut messages = vec![];
             let mut prom_kinds = vec![];
-            while messages.len() < config.bulk_max_size {
+            'qwe: while messages.len() < config.bulk_max_size {
                 while let Some((message, prom_kind)) = cached_messages.pop() {
-                    messages.push(message);
-                    prom_kinds.push(prom_kind);
-                    continue;
+                    if messages.len() + 1 < config.bulk_max_size
+                        && messages_size + message.data.len() < 9_500_000
+                    {
+                        messages_size += message.data.len();
+                        messages.push(message);
+                        prom_kinds.push(prom_kind);
+                    } else {
+                        cached_messages.push((message, prom_kind));
+                        break 'qwe;
+                    }
                 }
 
                 let message = tokio::select! {
