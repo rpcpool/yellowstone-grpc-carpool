@@ -7,8 +7,8 @@ use {
     google_cloud_googleapis::pubsub::v1::PubsubMessage,
     google_cloud_pubsub::{client::Client, subscription::SubscriptionConfig},
     std::{net::SocketAddr, time::Duration},
-    tokio::{task::JoinSet, time::sleep},
-    tracing::{info, warn},
+    tokio::{sync::mpsc, task::JoinSet, time::sleep},
+    tracing::{debug, info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::{subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount},
@@ -126,57 +126,10 @@ impl ArgsAction {
             .iter()
             .map(|v| bs58::decode(v).into_vec())
             .collect::<Result<_, _>>()?;
-
-        // Receive-send loop
-        let mut send_tasks = JoinSet::new();
-        let mut cached_messages: Vec<(PubsubMessage, GprcMessageKind)> = vec![];
-        'receive_send_loop: loop {
-            let sleep = sleep(config.batch.max_wait);
-            tokio::pin!(sleep);
-
-            let mut messages_size = 0;
-            let mut messages = vec![];
-            let mut prom_kinds = vec![];
-
-            loop {
-                if let Some((message, prom_kind)) = cached_messages.pop() {
-                    if messages.len() < config.batch.max_messages
-                        && messages_size + message.data.len() <= config.batch.max_size_bytes
-                    {
-                        prom::cached_messages_dec(prom_kind);
-                        messages_size += message.data.len();
-                        messages.push(message);
-                        prom_kinds.push(prom_kind);
-                        continue;
-                    } else {
-                        cached_messages.push((message, prom_kind));
-                        break;
-                    }
-                }
-
-                let send_task = if send_tasks.is_empty() {
-                    pending().boxed()
-                } else {
-                    send_tasks.join_next().boxed()
-                };
-
-                let message = tokio::select! {
-                    _ = &mut shutdown => break 'receive_send_loop,
-                    _ = &mut sleep => break,
-                    maybe_result = send_task => match maybe_result {
-                        Some(result) => {
-                            prom::send_batches_dec();
-                            result??;
-                            continue;
-                        }
-                        None => unreachable!()
-                    },
-                    message = geyser.next() => match message {
-                        Some(message) => message?,
-                        None => break 'receive_send_loop,
-                    },
-                };
-
+        let (messages_tx, mut messages_rx) = mpsc::unbounded_channel();
+        let mut messages_jh = tokio::spawn(async move {
+            while let Some(message) = geyser.next().await {
+                let message = message?;
                 match &message {
                     SubscribeUpdate {
                         filters: _,
@@ -205,9 +158,7 @@ impl ArgsAction {
                                 is_startup: false,
                             });
                             let prom_kind = GprcMessageKind::from(&update_oneof);
-                            prom::recv_inc(prom_kind);
-                            prom::cached_messages_inc(prom_kind);
-                            cached_messages.push((
+                            messages_tx.send((
                                 PubsubMessage {
                                     data: SubscribeUpdate {
                                         filters: filters.clone(),
@@ -217,7 +168,9 @@ impl ArgsAction {
                                     ..Default::default()
                                 },
                                 prom_kind,
-                            ));
+                            ))?;
+                            prom::recv_inc(prom_kind);
+                            prom::messages_queue_inc(prom_kind);
                         }
                     }
                     SubscribeUpdate {
@@ -225,20 +178,81 @@ impl ArgsAction {
                         update_oneof: Some(value),
                     } => {
                         let prom_kind = GprcMessageKind::from(value);
-                        prom::recv_inc(prom_kind);
-                        prom::cached_messages_inc(prom_kind);
-                        cached_messages.push((
+                        messages_tx.send((
                             PubsubMessage {
                                 data: message.encode_to_vec(),
                                 ..Default::default()
                             },
                             prom_kind,
-                        ));
+                        ))?;
+                        prom::recv_inc(prom_kind);
+                        prom::messages_queue_inc(prom_kind);
                     }
                     SubscribeUpdate {
                         filters: _,
                         update_oneof: None,
                     } => unreachable!("Expect valid message"),
+                }
+            }
+            Err::<(), anyhow::Error>(anyhow::anyhow!("gRPC stream finished"))
+        });
+
+        // Receive-send loop
+        let mut send_tasks = JoinSet::new();
+        let mut prefetched_message: Option<(PubsubMessage, GprcMessageKind)> = None;
+        'receive_send_loop: loop {
+            let sleep = sleep(config.batch.max_wait);
+            tokio::pin!(sleep);
+
+            let mut messages_size = 0;
+            let mut messages = vec![];
+            let mut prom_kinds = vec![];
+
+            loop {
+                if let Some((message, prom_kind)) = prefetched_message.take() {
+                    if messages.len() < config.batch.max_messages
+                        && messages_size + message.data.len() <= config.batch.max_size_bytes
+                    {
+                        messages_size += message.data.len();
+                        messages.push(message);
+                        prom_kinds.push(prom_kind);
+                    } else if message.data.len() > config.batch.max_size_bytes {
+                        prom::drop_oversized_inc(prom_kind);
+                        debug!("drop {prom_kind:?} message, size: {}", message.data.len());
+                    } else {
+                        prefetched_message = Some((message, prom_kind));
+                        break;
+                    }
+                }
+
+                let send_task_fut = if send_tasks.is_empty() {
+                    pending().boxed()
+                } else {
+                    send_tasks.join_next().boxed()
+                };
+
+                tokio::select! {
+                    _ = &mut shutdown => break 'receive_send_loop,
+                    messages_jh_result = &mut messages_jh => {
+                        messages_jh_result??;
+                        unreachable!();
+                    }
+                    _ = &mut sleep => break,
+                    maybe_result = send_task_fut => match maybe_result {
+                        Some(result) => {
+                            prom::send_batches_dec();
+                            result??;
+                            continue;
+                        }
+                        None => unreachable!()
+                    },
+                    message = messages_rx.recv() => match message {
+                        Some((message, prom_kind)) => {
+                            prom::messages_queue_dec(prom_kind);
+                            prefetched_message = Some((message, prom_kind));
+                        }
+                        None => break 'receive_send_loop,
+                    }
                 };
             }
             if messages.is_empty() {

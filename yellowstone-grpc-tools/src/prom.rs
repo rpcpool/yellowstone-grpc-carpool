@@ -1,7 +1,8 @@
 #[cfg(feature = "google-pubsub")]
 use crate::google_pubsub::prom::{
-    GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS, GOOGLE_PUBSUB_CACHED_MESSAGES_TOTAL,
-    GOOGLE_PUBSUB_RECV_TOTAL, GOOGLE_PUBSUB_SEND_BATCHES_IN_PROGRESS, GOOGLE_PUBSUB_SENT_TOTAL,
+    GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS, GOOGLE_PUBSUB_DROP_OVERSIZED_TOTAL,
+    GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE, GOOGLE_PUBSUB_RECV_TOTAL,
+    GOOGLE_PUBSUB_SEND_BATCHES_IN_PROGRESS, GOOGLE_PUBSUB_SENT_TOTAL,
 };
 #[cfg(feature = "kafka")]
 use crate::kafka::prom::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS};
@@ -42,9 +43,10 @@ pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
         {
             register!(GOOGLE_PUBSUB_RECV_TOTAL);
             register!(GOOGLE_PUBSUB_SENT_TOTAL);
-            register!(GOOGLE_PUBSUB_CACHED_MESSAGES_TOTAL);
+            register!(GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE);
             register!(GOOGLE_PUBSUB_SEND_BATCHES_IN_PROGRESS);
             register!(GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS);
+            register!(GOOGLE_PUBSUB_DROP_OVERSIZED_TOTAL);
         }
         #[cfg(feature = "kafka")]
         {

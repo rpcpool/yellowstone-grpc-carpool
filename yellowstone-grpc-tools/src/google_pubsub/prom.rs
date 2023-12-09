@@ -14,8 +14,8 @@ lazy_static::lazy_static! {
         &["kind"]
     ).unwrap();
 
-    pub(crate) static ref GOOGLE_PUBSUB_CACHED_MESSAGES_TOTAL: GaugeVec = GaugeVec::new(
-        Opts::new("google_pubsub_cached_messages_total", "Total number of messages in cached queue for sending to pubsub by type"),
+    pub(crate) static ref GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE: GaugeVec = GaugeVec::new(
+        Opts::new("google_pubsub_messages_queue_size", "Total number of messages in the queue for sending to pubsub by type"),
         &["kind"]
     ).unwrap();
 
@@ -27,29 +27,42 @@ lazy_static::lazy_static! {
         Opts::new("google_pubsub_awaiters_in_progress", "Number of awaiters in progress by type"),
         &["kind"]
     ).unwrap();
+
+    pub(crate) static ref GOOGLE_PUBSUB_DROP_OVERSIZED_TOTAL: IntCounterVec = IntCounterVec::new(
+        Opts::new("google_pubsub_drop_oversized_total", "Total number of dropped oversized messages"),
+        &["kind"]
+    ).unwrap();
 }
 
 pub fn recv_inc(kind: GprcMessageKind) {
     GOOGLE_PUBSUB_RECV_TOTAL
         .with_label_values(&[kind.as_str()])
-        .inc()
+        .inc();
+    GOOGLE_PUBSUB_RECV_TOTAL.with_label_values(&["total"]).inc()
 }
 
 pub fn sent_inc(kind: GprcMessageKind) {
     GOOGLE_PUBSUB_SENT_TOTAL
         .with_label_values(&[kind.as_str()])
+        .inc();
+    GOOGLE_PUBSUB_SENT_TOTAL.with_label_values(&["total"]).inc()
+}
+
+pub fn messages_queue_inc(kind: GprcMessageKind) {
+    GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE
+        .with_label_values(&[kind.as_str()])
+        .inc();
+    GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE
+        .with_label_values(&["total"])
         .inc()
 }
 
-pub fn cached_messages_inc(kind: GprcMessageKind) {
-    GOOGLE_PUBSUB_CACHED_MESSAGES_TOTAL
+pub fn messages_queue_dec(kind: GprcMessageKind) {
+    GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE
         .with_label_values(&[kind.as_str()])
-        .inc()
-}
-
-pub fn cached_messages_dec(kind: GprcMessageKind) {
-    GOOGLE_PUBSUB_CACHED_MESSAGES_TOTAL
-        .with_label_values(&[kind.as_str()])
+        .dec();
+    GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE
+        .with_label_values(&["total"])
         .dec()
 }
 
@@ -64,11 +77,23 @@ pub fn send_batches_dec() {
 pub fn send_awaiters_inc(kind: GprcMessageKind) {
     GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS
         .with_label_values(&[kind.as_str()])
+        .inc();
+    GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS
+        .with_label_values(&["total"])
         .inc()
 }
 
 pub fn send_awaiters_dec(kind: GprcMessageKind) {
     GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS
         .with_label_values(&[kind.as_str()])
+        .dec();
+    GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS
+        .with_label_values(&["total"])
         .dec()
+}
+
+pub fn drop_oversized_inc(kind: GprcMessageKind) {
+    GOOGLE_PUBSUB_DROP_OVERSIZED_TOTAL
+        .with_label_values(&[kind.as_str()])
+        .inc()
 }
