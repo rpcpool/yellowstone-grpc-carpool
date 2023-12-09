@@ -1,6 +1,9 @@
 use {
     clap::{Parser, Subcommand},
-    futures::{future::BoxFuture, stream::StreamExt},
+    futures::{
+        future::{pending, BoxFuture, FutureExt},
+        stream::StreamExt,
+    },
     google_cloud_googleapis::pubsub::v1::PubsubMessage,
     google_cloud_pubsub::{client::Client, subscription::SubscriptionConfig},
     std::{net::SocketAddr, time::Duration},
@@ -62,7 +65,7 @@ enum ArgsAction {
 impl ArgsAction {
     async fn run(self, config: Config) -> anyhow::Result<()> {
         let shutdown = create_shutdown()?;
-        let client = config.create_client().await?;
+        let client = config.client.create_client().await?;
 
         match self {
             ArgsAction::Grpc2PubSub => {
@@ -103,7 +106,7 @@ impl ArgsAction {
             );
             topic.create(None, None).await?;
         }
-        let publisher = topic.new_publisher(Some(config.get_publisher_config()));
+        let publisher = topic.new_publisher(Some(config.publisher.get_publisher_config()));
 
         // Create gRPC client & subscribe
         let mut client = GeyserGrpcClient::connect_with_timeout(
@@ -117,49 +120,59 @@ impl ArgsAction {
         .await?;
         let mut geyser = client.subscribe_once2(config.request.to_proto()).await?;
 
+        // hack for now
+        let exclude_pubkeys: Vec<Vec<u8>> = config
+            .block_exclude_pubkeys
+            .iter()
+            .map(|v| bs58::decode(v).into_vec())
+            .collect::<Result<_, _>>()?;
+
         // Receive-send loop
         let mut send_tasks = JoinSet::new();
         let mut cached_messages: Vec<(PubsubMessage, GprcMessageKind)> = vec![];
-        'outer: loop {
-            let sleep = sleep(Duration::from_millis(config.bulk_max_wait_ms as u64));
+        'receive_send_loop: loop {
+            let sleep = sleep(config.batch.max_wait);
             tokio::pin!(sleep);
+
             let mut messages_size = 0;
             let mut messages = vec![];
             let mut prom_kinds = vec![];
-            'qwe: while messages.len() < config.bulk_max_size {
-                while let Some((message, prom_kind)) = cached_messages.pop() {
-                    if messages.len() + 1 < config.bulk_max_size
-                        && messages_size + message.data.len() < 9_500_000
+
+            loop {
+                if let Some((message, prom_kind)) = cached_messages.pop() {
+                    if messages.len() < config.batch.max_messages
+                        && messages_size + message.data.len() <= config.batch.max_size_bytes
                     {
                         messages_size += message.data.len();
                         messages.push(message);
                         prom_kinds.push(prom_kind);
+                        continue;
                     } else {
                         cached_messages.push((message, prom_kind));
-                        break 'qwe;
+                        break;
                     }
                 }
 
+                let send_task = if send_tasks.is_empty() {
+                    pending().boxed()
+                } else {
+                    send_tasks.join_next().boxed()
+                };
+
                 let message = tokio::select! {
-                    _ = &mut shutdown => break 'outer,
+                    _ = &mut shutdown => break 'receive_send_loop,
                     _ = &mut sleep => break,
-                    maybe_result = send_tasks.join_next() => match maybe_result {
+                    maybe_result = send_task => match maybe_result {
                         Some(result) => {
                             result??;
                             continue;
                         }
-                        None => tokio::select! {
-                            _ = &mut shutdown => break 'outer,
-                            _ = &mut sleep => break,
-                            message = geyser.next() => message,
-                        }
+                        None => unreachable!()
                     },
-                    message = geyser.next() => message,
-                }
-                .transpose()?;
-                let message = match message {
-                    Some(message) => message,
-                    None => break 'outer,
+                    message = geyser.next() => match message {
+                        Some(message) => message?,
+                        None => break 'receive_send_loop,
+                    },
                 };
 
                 match &message {
@@ -175,29 +188,8 @@ impl ArgsAction {
                         filters,
                         update_oneof: Some(UpdateOneof::Block(block_message)),
                     } => {
-                        // hack for now
-                        let exclude: Vec<Vec<u8>> = [
-                            // "11111111111111111111111111111111", // 926
-                            "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA", // 707
-                            "Vote111111111111111111111111111111111111111", // 672
-                                                                           // "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s", // 140
-                                                                           // "SW1TCH7qEPTdLsDHRgPuMQjbQxKdH2aBStViMFnt64f", // 120
-                                                                           // "FsJ3A3u2vn5cTVofAjvy6y5kwABJAqYWpe4975bi2epH", // 74
-                                                                           // "dRiftyHA39MWEi3m9aunc5MzRF1JYuBsbn6VPcn33UH", // 35
-                                                                           // "zDEXqXEG7gAyxb1Kg9mK5fPnUdENCGKzWrM21RMdWRq", // 33
-                                                                           // "whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc", // 28
-                                                                           // "ZETAxsqBRek56DhiGXrn75yj2NHU3aYUnxvHXpkf3aD", // 26
-                                                                           // "SAGEqqFewepDHH6hMDcmWy7yjHPpyKLDnRXKb3Ki8e6", // 18
-                                                                           // "Cargo8a1e6NkGyrjy4BQEW4ASGKs9KSyDyUrXMfpJoiH", // 18
-                                                                           // "srmqPvymJeFKQ4zGQed1GFppgkRHL9kaELCbyksJtPX", // 17
-                                                                           // "Stake11111111111111111111111111111111111111", // 14
-                        ]
-                        .into_iter()
-                        .map(|v| bs58::decode(v).into_vec())
-                        .collect::<Result<_, _>>()?;
-
                         for account in block_message.accounts.iter() {
-                            if exclude.iter().any(|key| key == &account.owner) {
+                            if exclude_pubkeys.iter().any(|key| key == &account.owner) {
                                 continue;
                             }
 
@@ -242,18 +234,21 @@ impl ArgsAction {
                 continue;
             }
 
-            for (awaiter, prom_kind) in publisher
-                .publish_bulk(messages)
-                .await
-                .into_iter()
-                .zip(prom_kinds.into_iter())
-            {
-                send_tasks.spawn(async move {
+            while send_tasks.len() >= config.batch.max_in_progress {
+                if let Some(result) = send_tasks.join_next().await {
+                    result??;
+                }
+            }
+
+            let awaiters = publisher.publish_bulk(messages).await;
+            send_tasks.spawn(async move {
+                for (awaiter, prom_kind) in awaiters.into_iter().zip(prom_kinds.into_iter()) {
                     awaiter.get().await?;
                     prom::sent_inc(prom_kind);
-                    Ok::<(), anyhow::Error>(())
-                });
-            }
+                }
+
+                Ok::<(), anyhow::Error>(())
+            });
         }
         warn!("shutdown received...");
         while let Some(result) = send_tasks.join_next().await {
