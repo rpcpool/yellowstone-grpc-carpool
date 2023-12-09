@@ -143,6 +143,7 @@ impl ArgsAction {
                     if messages.len() < config.batch.max_messages
                         && messages_size + message.data.len() <= config.batch.max_size_bytes
                     {
+                        prom::cached_messages_dec(prom_kind);
                         messages_size += message.data.len();
                         messages.push(message);
                         prom_kinds.push(prom_kind);
@@ -164,6 +165,7 @@ impl ArgsAction {
                     _ = &mut sleep => break,
                     maybe_result = send_task => match maybe_result {
                         Some(result) => {
+                            prom::send_batches_dec();
                             result??;
                             continue;
                         }
@@ -179,11 +181,15 @@ impl ArgsAction {
                     SubscribeUpdate {
                         filters: _,
                         update_oneof: Some(UpdateOneof::Ping(_)),
-                    } => {}
+                    } => {
+                        prom::recv_inc(GprcMessageKind::Ping);
+                    }
                     SubscribeUpdate {
                         filters: _,
                         update_oneof: Some(UpdateOneof::Pong(_)),
-                    } => {}
+                    } => {
+                        prom::recv_inc(GprcMessageKind::Pong);
+                    }
                     SubscribeUpdate {
                         filters,
                         update_oneof: Some(UpdateOneof::Block(block_message)),
@@ -199,6 +205,8 @@ impl ArgsAction {
                                 is_startup: false,
                             });
                             let prom_kind = GprcMessageKind::from(&update_oneof);
+                            prom::recv_inc(prom_kind);
+                            prom::cached_messages_inc(prom_kind);
                             cached_messages.push((
                                 PubsubMessage {
                                     data: SubscribeUpdate {
@@ -216,12 +224,15 @@ impl ArgsAction {
                         filters: _,
                         update_oneof: Some(value),
                     } => {
+                        let prom_kind = GprcMessageKind::from(value);
+                        prom::recv_inc(prom_kind);
+                        prom::cached_messages_inc(prom_kind);
                         cached_messages.push((
                             PubsubMessage {
                                 data: message.encode_to_vec(),
                                 ..Default::default()
                             },
-                            GprcMessageKind::from(value),
+                            prom_kind,
                         ));
                     }
                     SubscribeUpdate {
@@ -236,22 +247,29 @@ impl ArgsAction {
 
             while send_tasks.len() >= config.batch.max_in_progress {
                 if let Some(result) = send_tasks.join_next().await {
+                    prom::send_batches_dec();
                     result??;
                 }
             }
 
             let awaiters = publisher.publish_bulk(messages).await;
+            for prom_kind in prom_kinds.iter().copied() {
+                prom::send_awaiters_inc(prom_kind);
+            }
             send_tasks.spawn(async move {
                 for (awaiter, prom_kind) in awaiters.into_iter().zip(prom_kinds.into_iter()) {
                     awaiter.get().await?;
                     prom::sent_inc(prom_kind);
+                    prom::send_awaiters_dec(prom_kind);
                 }
 
                 Ok::<(), anyhow::Error>(())
             });
+            prom::send_batches_inc();
         }
         warn!("shutdown received...");
         while let Some(result) = send_tasks.join_next().await {
+            prom::send_batches_dec();
             result??;
         }
         Ok(())

@@ -1,5 +1,8 @@
 #[cfg(feature = "google-pubsub")]
-use crate::google_pubsub::prom::GOOGLE_PUBSUB_SENT_TOTAL;
+use crate::google_pubsub::prom::{
+    GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS, GOOGLE_PUBSUB_CACHED_MESSAGES_TOTAL,
+    GOOGLE_PUBSUB_RECV_TOTAL, GOOGLE_PUBSUB_SEND_BATCHES_IN_PROGRESS, GOOGLE_PUBSUB_SENT_TOTAL,
+};
 #[cfg(feature = "kafka")]
 use crate::kafka::prom::{KAFKA_DEDUP_TOTAL, KAFKA_RECV_TOTAL, KAFKA_SENT_TOTAL, KAFKA_STATS};
 use {
@@ -37,7 +40,11 @@ pub fn run_server(address: SocketAddr) -> anyhow::Result<()> {
         register!(VERSION);
         #[cfg(feature = "google-pubsub")]
         {
+            register!(GOOGLE_PUBSUB_RECV_TOTAL);
             register!(GOOGLE_PUBSUB_SENT_TOTAL);
+            register!(GOOGLE_PUBSUB_CACHED_MESSAGES_TOTAL);
+            register!(GOOGLE_PUBSUB_SEND_BATCHES_IN_PROGRESS);
+            register!(GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS);
         }
         #[cfg(feature = "kafka")]
         {
@@ -103,6 +110,8 @@ pub enum GprcMessageKind {
     Slot,
     Transaction,
     Block,
+    Ping,
+    Pong,
     BlockMeta,
     Entry,
     Unknown,
@@ -115,8 +124,8 @@ impl From<&UpdateOneof> for GprcMessageKind {
             UpdateOneof::Slot(_) => Self::Slot,
             UpdateOneof::Transaction(_) => Self::Transaction,
             UpdateOneof::Block(_) => Self::Block,
-            UpdateOneof::Ping(_) => unreachable!(),
-            UpdateOneof::Pong(_) => unreachable!(),
+            UpdateOneof::Ping(_) => Self::Ping,
+            UpdateOneof::Pong(_) => Self::Pong,
             UpdateOneof::BlockMeta(_) => Self::BlockMeta,
             UpdateOneof::Entry(_) => Self::Entry,
         }
@@ -130,6 +139,8 @@ impl GprcMessageKind {
             GprcMessageKind::Slot => "slot",
             GprcMessageKind::Transaction => "transaction",
             GprcMessageKind::Block => "block",
+            GprcMessageKind::Ping => "ping",
+            GprcMessageKind::Pong => "pong",
             GprcMessageKind::BlockMeta => "blockmeta",
             GprcMessageKind::Entry => "entry",
             GprcMessageKind::Unknown => "unknown",
