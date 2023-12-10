@@ -51,6 +51,8 @@ jobs:
               ~/.cargo/git/db/
               target
           key: ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-${{ hashFiles('**/Cargo.lock') }}-0002
+          restore-keys:
+            ${{ matrix.os }}-cargo-${{ hashFiles('rust-toolchain.toml') }}-
 
       - name: Install dependencies
         run: |

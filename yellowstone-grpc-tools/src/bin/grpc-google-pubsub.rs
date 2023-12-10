@@ -8,7 +8,7 @@ use {
     google_cloud_pubsub::{client::Client, subscription::SubscriptionConfig},
     std::{net::SocketAddr, time::Duration},
     tokio::{sync::mpsc, task::JoinSet, time::sleep},
-    tracing::{debug, info, warn},
+    tracing::{debug, error, info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
         prelude::{subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount},
@@ -241,7 +241,7 @@ impl ArgsAction {
                     maybe_result = send_task_fut => match maybe_result {
                         Some(result) => {
                             prom::send_batches_dec();
-                            result??;
+                            result?;
                             continue;
                         }
                         None => unreachable!()
@@ -262,7 +262,7 @@ impl ArgsAction {
             while send_tasks.len() >= config.batch.max_in_progress {
                 if let Some(result) = send_tasks.join_next().await {
                     prom::send_batches_dec();
-                    result??;
+                    result?;
                 }
             }
 
@@ -272,19 +272,22 @@ impl ArgsAction {
             }
             send_tasks.spawn(async move {
                 for (awaiter, prom_kind) in awaiters.into_iter().zip(prom_kinds.into_iter()) {
-                    awaiter.get().await?;
-                    prom::sent_inc(prom_kind);
+                    let status = if let Err(error) = awaiter.get().await {
+                        error!("failed to send message {prom_kind:?}, error: {error:?}");
+                        Err(())
+                    } else {
+                        Ok(())
+                    };
+                    prom::sent_inc(prom_kind, status);
                     prom::send_awaiters_dec(prom_kind);
                 }
-
-                Ok::<(), anyhow::Error>(())
             });
             prom::send_batches_inc();
         }
         warn!("shutdown received...");
         while let Some(result) = send_tasks.join_next().await {
             prom::send_batches_dec();
-            result??;
+            result?;
         }
         Ok(())
     }

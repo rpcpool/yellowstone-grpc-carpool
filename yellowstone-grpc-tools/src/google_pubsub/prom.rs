@@ -11,7 +11,7 @@ lazy_static::lazy_static! {
 
     pub(crate) static ref GOOGLE_PUBSUB_SENT_TOTAL: IntCounterVec = IntCounterVec::new(
         Opts::new("google_pubsub_sent_total", "Total number of uploaded messages to pubsub by type"),
-        &["kind"]
+        &["kind", "status"]
     ).unwrap();
 
     pub(crate) static ref GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE: GaugeVec = GaugeVec::new(
@@ -41,11 +41,15 @@ pub fn recv_inc(kind: GprcMessageKind) {
     GOOGLE_PUBSUB_RECV_TOTAL.with_label_values(&["total"]).inc()
 }
 
-pub fn sent_inc(kind: GprcMessageKind) {
+pub fn sent_inc(kind: GprcMessageKind, status: Result<(), ()>) {
+    let status = if status.is_ok() { "success" } else { "failed" };
+
     GOOGLE_PUBSUB_SENT_TOTAL
-        .with_label_values(&[kind.as_str()])
+        .with_label_values(&[kind.as_str(), status])
         .inc();
-    GOOGLE_PUBSUB_SENT_TOTAL.with_label_values(&["total"]).inc()
+    GOOGLE_PUBSUB_SENT_TOTAL
+        .with_label_values(&["total", status])
+        .inc()
 }
 
 pub fn messages_queue_inc(kind: GprcMessageKind) {
