@@ -265,7 +265,10 @@ impl ArgsAction {
                             prom::messages_queue_dec(prom_kind);
                             prefetched_message = Some((message, prom_kind));
                         }
-                        None => break 'receive_send_loop,
+                        None => {
+                            messages_jh.await??;
+                            anyhow::bail!("internal messages stream from gRPC is closed")
+                        },
                     }
                 };
             }
