@@ -1,6 +1,6 @@
 use {
     crate::prom::GprcMessageKind,
-    prometheus::{Gauge, GaugeVec, IntCounterVec, Opts},
+    prometheus::{Gauge, IntCounterVec, IntGaugeVec, Opts},
 };
 
 lazy_static::lazy_static! {
@@ -14,7 +14,7 @@ lazy_static::lazy_static! {
         &["kind", "status"]
     ).unwrap();
 
-    pub(crate) static ref GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE: GaugeVec = GaugeVec::new(
+    pub(crate) static ref GOOGLE_PUBSUB_MESSAGES_QUEUE_SIZE: IntGaugeVec = IntGaugeVec::new(
         Opts::new("google_pubsub_messages_queue_size", "Total number of messages in the queue for sending to pubsub by type"),
         &["kind"]
     ).unwrap();
@@ -23,7 +23,7 @@ lazy_static::lazy_static! {
         "google_pubsub_send_batches_in_progress", "Number of batches in progress"
     ).unwrap();
 
-    pub(crate) static ref GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS: GaugeVec = GaugeVec::new(
+    pub(crate) static ref GOOGLE_PUBSUB_AWAITERS_IN_PROGRESS: IntGaugeVec = IntGaugeVec::new(
         Opts::new("google_pubsub_awaiters_in_progress", "Number of awaiters in progress by type"),
         &["kind"]
     ).unwrap();
@@ -31,6 +31,11 @@ lazy_static::lazy_static! {
     pub(crate) static ref GOOGLE_PUBSUB_DROP_OVERSIZED_TOTAL: IntCounterVec = IntCounterVec::new(
         Opts::new("google_pubsub_drop_oversized_total", "Total number of dropped oversized messages"),
         &["kind"]
+    ).unwrap();
+
+    pub(crate) static ref GOOGLE_PUBSUB_SLOT_TIP: IntGaugeVec = IntGaugeVec::new(
+        Opts::new("google_pubsub_slot_tip", "Latest received slot by commitment"),
+        &["commitment"]
     ).unwrap();
 }
 
@@ -100,4 +105,10 @@ pub fn drop_oversized_inc(kind: GprcMessageKind) {
     GOOGLE_PUBSUB_DROP_OVERSIZED_TOTAL
         .with_label_values(&[kind.as_str()])
         .inc()
+}
+
+pub fn set_slot_tip(commitment: &str, slot: i64) {
+    GOOGLE_PUBSUB_SLOT_TIP
+        .with_label_values(&[commitment])
+        .set(slot)
 }

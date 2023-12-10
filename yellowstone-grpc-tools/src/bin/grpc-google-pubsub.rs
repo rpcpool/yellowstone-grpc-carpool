@@ -11,7 +11,9 @@ use {
     tracing::{debug, error, info, warn},
     yellowstone_grpc_client::GeyserGrpcClient,
     yellowstone_grpc_proto::{
-        prelude::{subscribe_update::UpdateOneof, SubscribeUpdate, SubscribeUpdateAccount},
+        prelude::{
+            subscribe_update::UpdateOneof, CommitmentLevel, SubscribeUpdate, SubscribeUpdateAccount,
+        },
         prost::Message as _,
     },
     yellowstone_grpc_tools::{
@@ -177,6 +179,18 @@ impl ArgsAction {
                         filters: _,
                         update_oneof: Some(value),
                     } => {
+                        if let UpdateOneof::Slot(slot) = value {
+                            prom::set_slot_tip(
+                                match CommitmentLevel::try_from(slot.status) {
+                                    Ok(CommitmentLevel::Processed) => "processed",
+                                    Ok(CommitmentLevel::Confirmed) => "confirmed",
+                                    Ok(CommitmentLevel::Finalized) => "finalized",
+                                    _ => unreachable!(),
+                                },
+                                slot.slot.try_into().unwrap(),
+                            );
+                        }
+
                         let prom_kind = GprcMessageKind::from(value);
                         messages_tx.send((
                             PubsubMessage {
