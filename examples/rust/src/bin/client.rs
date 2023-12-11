@@ -531,27 +531,31 @@ async fn geyser_subscribe(
     while let Some(message) = stream.next().await {
         match message {
             Ok(msg) => {
-                #[allow(clippy::single_match)]
-                match msg.update_oneof {
-                    Some(UpdateOneof::Account(account)) => {
-                        let account: AccountPretty = account.into();
-                        info!(
-                            "new account update: filters {:?}, account: {:#?}",
-                            msg.filters, account
-                        );
-                        continue;
-                    }
-                    Some(UpdateOneof::Transaction(tx)) => {
-                        let tx: TransactionPretty = tx.into();
-                        info!(
-                            "new transaction update: filters {:?}, transaction: {:#?}",
-                            msg.filters, tx
-                        );
-                        continue;
-                    }
-                    _ => {}
+                // #[allow(clippy::single_match)]
+                // match msg.update_oneof {
+                //     Some(UpdateOneof::Account(account)) => {
+                //         let account: AccountPretty = account.into();
+                //         info!(
+                //             "new account update: filters {:?}, account: {:#?}",
+                //             msg.filters, account
+                //         );
+                //         continue;
+                //     }
+                //     Some(UpdateOneof::Transaction(tx)) => {
+                //         let tx: TransactionPretty = tx.into();
+                //         info!(
+                //             "new transaction update: filters {:?}, transaction: {:#?}",
+                //             msg.filters, tx
+                //         );
+                //         continue;
+                //     }
+                //     _ => {}
+                // }
+                // info!("new message: {msg:?}")
+
+                if let Some(UpdateOneof::Slot(msg)) = msg.update_oneof {
+                    info!("new slot message: {msg:?}");
                 }
-                info!("new message: {msg:?}")
             }
             Err(error) => {
                 error!("error: {error:?}");
