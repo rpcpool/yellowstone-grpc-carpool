@@ -1,6 +1,7 @@
 use {
     crate::prom::GprcMessageKind,
     prometheus::{Gauge, IntCounterVec, IntGaugeVec, Opts},
+    yellowstone_grpc_proto::prelude::CommitmentLevel,
 };
 
 lazy_static::lazy_static! {
@@ -107,8 +108,12 @@ pub fn drop_oversized_inc(kind: GprcMessageKind) {
         .inc()
 }
 
-pub fn set_slot_tip(commitment: &str, slot: i64) {
+pub fn set_slot_tip(commitment: CommitmentLevel, slot: i64) {
     GOOGLE_PUBSUB_SLOT_TIP
-        .with_label_values(&[commitment])
+        .with_label_values(&[match commitment {
+            CommitmentLevel::Processed => "processed",
+            CommitmentLevel::Confirmed => "confirmed",
+            CommitmentLevel::Finalized => "finalized",
+        }])
         .set(slot)
 }

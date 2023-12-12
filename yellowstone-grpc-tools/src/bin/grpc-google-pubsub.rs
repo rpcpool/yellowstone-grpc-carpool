@@ -1,4 +1,5 @@
 use {
+    anyhow::Context,
     clap::{Parser, Subcommand},
     futures::{
         future::{pending, BoxFuture, FutureExt},
@@ -100,13 +101,20 @@ impl ArgsAction {
     ) -> anyhow::Result<()> {
         // Connect to Pub/Sub and create topic if not exists
         let topic = client.topic(&config.topic);
-        if !topic.exists(None).await? {
+        if !topic
+            .exists(None)
+            .await
+            .with_context(|| format!("failed to get topic: {}", config.topic))?
+        {
             anyhow::ensure!(
                 config.create_if_not_exists,
                 "topic {} doesn't exists",
                 config.topic
             );
-            topic.create(None, None).await?;
+            topic
+                .create(None, None)
+                .await
+                .with_context(|| format!("failed to create topic: {}", config.topic))?;
         }
         let publisher = topic.new_publisher(Some(config.publisher.get_publisher_config()));
 
@@ -131,7 +139,7 @@ impl ArgsAction {
         let (messages_tx, mut messages_rx) = mpsc::unbounded_channel();
         let mut messages_jh = tokio::spawn(async move {
             while let Some(message) = geyser.next().await {
-                let message = message?;
+                let message = message.context("failed to get message from gRPC")?;
                 match &message {
                     SubscribeUpdate {
                         filters: _,
@@ -160,17 +168,19 @@ impl ArgsAction {
                                 is_startup: false,
                             });
                             let prom_kind = GprcMessageKind::from(&update_oneof);
-                            messages_tx.send((
-                                PubsubMessage {
-                                    data: SubscribeUpdate {
-                                        filters: filters.clone(),
-                                        update_oneof: Some(update_oneof),
-                                    }
-                                    .encode_to_vec(),
-                                    ..Default::default()
-                                },
-                                prom_kind,
-                            ))?;
+                            messages_tx
+                                .send((
+                                    PubsubMessage {
+                                        data: SubscribeUpdate {
+                                            filters: filters.clone(),
+                                            update_oneof: Some(update_oneof),
+                                        }
+                                        .encode_to_vec(),
+                                        ..Default::default()
+                                    },
+                                    prom_kind,
+                                ))
+                                .context("failed to send gRPC message to pubsub queue")?;
                             prom::recv_inc(prom_kind);
                             prom::messages_queue_inc(prom_kind);
                         }
@@ -181,24 +191,21 @@ impl ArgsAction {
                     } => {
                         if let UpdateOneof::Slot(slot) = value {
                             prom::set_slot_tip(
-                                match CommitmentLevel::try_from(slot.status) {
-                                    Ok(CommitmentLevel::Processed) => "processed",
-                                    Ok(CommitmentLevel::Confirmed) => "confirmed",
-                                    Ok(CommitmentLevel::Finalized) => "finalized",
-                                    _ => unreachable!(),
-                                },
-                                slot.slot.try_into().unwrap(),
+                                CommitmentLevel::try_from(slot.status).expect("valid commitment"),
+                                slot.slot.try_into().expect("valid i64 slot"),
                             );
                         }
 
                         let prom_kind = GprcMessageKind::from(value);
-                        messages_tx.send((
-                            PubsubMessage {
-                                data: message.encode_to_vec(),
-                                ..Default::default()
-                            },
-                            prom_kind,
-                        ))?;
+                        messages_tx
+                            .send((
+                                PubsubMessage {
+                                    data: message.encode_to_vec(),
+                                    ..Default::default()
+                                },
+                                prom_kind,
+                            ))
+                            .context("failed to send gRPC message to pubsub queue")?;
                         prom::recv_inc(prom_kind);
                         prom::messages_queue_inc(prom_kind);
                     }
@@ -367,11 +374,14 @@ async fn main() -> anyhow::Result<()> {
 
     // Parse args
     let args = Args::parse();
-    let config = config_load::<Config>(&args.config).await?;
+    let config = config_load::<Config>(&args.config)
+        .await
+        .with_context(|| format!("failed to load config from file: {}", args.config))?;
 
     // Run prometheus server
     if let Some(address) = args.prometheus.or(config.prometheus) {
-        prometheus_run_server(address)?;
+        prometheus_run_server(address)
+            .with_context(|| format!("failed to run server at: {:?}", address))?;
     }
 
     args.action.run(config).await
