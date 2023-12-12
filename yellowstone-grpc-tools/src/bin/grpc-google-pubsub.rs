@@ -126,6 +126,7 @@ impl ArgsAction {
             Some(Duration::from_secs(10)),
             Some(Duration::from_secs(5)),
             false,
+            config.max_message_size,
         )
         .await?;
         let mut geyser = client.subscribe_once2(config.request.to_proto()).await?;

@@ -29,6 +29,7 @@
                 }
             }
         },
+        "max_message_size": "536_870_912", // 512MiB
         "block_exclude_pubkeys": [
             "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
             "Vote111111111111111111111111111111111111111"

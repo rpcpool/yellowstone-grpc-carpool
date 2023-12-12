@@ -447,6 +447,7 @@ async fn main() -> anyhow::Result<()> {
                 Some(Duration::from_secs(10)),
                 Some(Duration::from_secs(10)),
                 false,
+                64 * 1024 * 1024,
             )
             .await
             .map_err(|e| backoff::Error::transient(anyhow::Error::new(e)))?;

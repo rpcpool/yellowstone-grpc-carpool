@@ -71,6 +71,11 @@ pub struct ConfigGrpc2PubSub {
     pub endpoint: String,
     pub x_token: Option<String>,
     pub request: ConfigGrpcRequest,
+    #[serde(
+        default = "ConfigGrpc2PubSub::default_max_message_size",
+        deserialize_with = "deserialize_usize_str"
+    )]
+    pub max_message_size: usize,
     pub block_exclude_pubkeys: Vec<String>,
 
     pub topic: String,
@@ -83,6 +88,12 @@ pub struct ConfigGrpc2PubSub {
 
     // Publisher bulk/batch config
     pub batch: ConfigGrpc2PubSubBatch,
+}
+
+impl ConfigGrpc2PubSub {
+    const fn default_max_message_size() -> usize {
+        512 * 1024 * 1024
+    }
 }
 
 #[derive(Debug, Deserialize)]
