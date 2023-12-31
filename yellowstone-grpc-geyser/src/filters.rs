@@ -43,9 +43,13 @@ pub struct Filter {
 }
 
 impl Filter {
-    pub fn new(config: &SubscribeRequest, limit: &ConfigGrpcFilters) -> anyhow::Result<Self> {
+    pub fn new(
+        config: &SubscribeRequest,
+        limit: &ConfigGrpcFilters,
+        carpool_exclude: Vec<Pubkey>,
+    ) -> anyhow::Result<Self> {
         Ok(Self {
-            accounts: FilterAccounts::new(&config.accounts, &limit.accounts)?,
+            accounts: FilterAccounts::new(&config.accounts, &limit.accounts, carpool_exclude)?,
             slots: FilterSlots::new(&config.slots, &limit.slots)?,
             transactions: FilterTransactions::new(&config.transactions, &limit.transactions)?,
             entry: FilterEntry::new(&config.entry, &limit.entry)?,
@@ -134,16 +138,21 @@ struct FilterAccounts {
     account_required: HashSet<String>,
     owner: HashMap<Pubkey, HashSet<String>>,
     owner_required: HashSet<String>,
+    carpool_exclude: Vec<Pubkey>,
 }
 
 impl FilterAccounts {
     fn new(
         configs: &HashMap<String, SubscribeRequestFilterAccounts>,
         limit: &ConfigGrpcFiltersAccounts,
+        carpool_exclude: Vec<Pubkey>,
     ) -> anyhow::Result<Self> {
         ConfigGrpcFilters::check_max(configs.len(), limit.max)?;
 
-        let mut this = Self::default();
+        let mut this = Self {
+            carpool_exclude,
+            ..Default::default()
+        };
         for (name, filter) in configs {
             ConfigGrpcFilters::check_any(
                 filter.account.is_empty() && filter.owner.is_empty(),
@@ -192,6 +201,10 @@ impl FilterAccounts {
     }
 
     fn get_filters<'a>(&self, message: &'a MessageAccount) -> Vec<(Vec<String>, MessageRef<'a>)> {
+        if self.carpool_exclude.iter().any(|key| key == &message.account.owner) {
+            return vec![];
+        }
+
         let mut filter = FilterAccountsMatch::new(self);
         filter.match_account(&message.account.pubkey);
         filter.match_owner(&message.account.owner);
@@ -848,7 +861,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit);
+        let filter = Filter::new(&config, &limit, vec![]);
         assert!(filter.is_ok());
     }
 
@@ -878,7 +891,7 @@ mod tests {
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.accounts.any = false;
-        let filter = Filter::new(&config, &limit);
+        let filter = Filter::new(&config, &limit, vec![]);
         // filter should fail
         assert!(filter.is_err());
     }
@@ -912,7 +925,7 @@ mod tests {
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
-        let filter = Filter::new(&config, &limit);
+        let filter = Filter::new(&config, &limit, vec![]);
         // filter should fail
         assert!(filter.is_err());
     }
@@ -945,7 +958,7 @@ mod tests {
         };
         let mut limit = ConfigGrpcFilters::default();
         limit.transactions.any = false;
-        let filter_res = Filter::new(&config, &limit);
+        let filter_res = Filter::new(&config, &limit, vec![]);
         // filter should succeed
         assert!(filter_res.is_ok());
     }
@@ -983,7 +996,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, vec![]).unwrap();
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
@@ -1026,7 +1039,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, vec![]).unwrap();
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
@@ -1069,7 +1082,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, vec![]).unwrap();
 
         let message_transaction =
             create_message_transaction(&keypair_b, vec![account_key_b, account_key_a]);
@@ -1118,7 +1131,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, vec![]).unwrap();
 
         let message_transaction = create_message_transaction(
             &keypair_x,
@@ -1169,7 +1182,7 @@ mod tests {
             ping: None,
         };
         let limit = ConfigGrpcFilters::default();
-        let filter = Filter::new(&config, &limit).unwrap();
+        let filter = Filter::new(&config, &limit, vec![]).unwrap();
 
         let message_transaction =
             create_message_transaction(&keypair_x, vec![account_key_x, account_key_z]);

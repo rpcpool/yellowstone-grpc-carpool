@@ -95,6 +95,10 @@ pub struct ConfigGrpc {
     /// Limits for possible filters
     #[serde(default)]
     pub filters: ConfigGrpcFilters,
+
+    /// Addresses excluded by carpool
+    #[serde(default, deserialize_with = "deserialize_pubkey_set")]
+    pub carpool_exclude: HashSet<Pubkey>,
 }
 
 impl ConfigGrpc {
